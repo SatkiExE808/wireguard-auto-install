@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# WireGuard Auto-Install Script - Fixed Version
-# Complete VPN server deployment and management
+# WireGuard Auto-Install Script - Complete Final Version
+# Includes automatic reinstall and full management features
 
 set -euo pipefail
 
@@ -21,7 +21,7 @@ WG_PORT="51820"
 WG_NET="10.66.66"
 SERVER_IP=""
 CLIENT_DNS="1.1.1.1,8.8.8.8"
-SCRIPT_VERSION="2.0.2"
+SCRIPT_VERSION="2.1.0"
 
 # Print functions
 print_status() {
@@ -179,6 +179,117 @@ start_wireguard() {
         print_error "Failed to start WireGuard"
         exit 1
     fi
+}
+
+# Automatic clean uninstall (for reinstall)
+clean_uninstall() {
+    local silent=${1:-false}
+    
+    if [[ $silent == false ]]; then
+        print_info "Performing clean uninstall..."
+    fi
+    
+    # Stop and disable WireGuard service
+    systemctl stop wg-quick@"$WG_INTERFACE" 2>/dev/null || true
+    systemctl disable wg-quick@"$WG_INTERFACE" 2>/dev/null || true
+    
+    # Remove WireGuard package
+    case $OS in
+        ubuntu|debian)
+            apt-get remove --purge -y wireguard wireguard-tools 2>/dev/null || true
+            apt-get autoremove -y 2>/dev/null || true
+            ;;
+        centos|rhel|fedora)
+            if command -v dnf &> /dev/null; then
+                dnf remove -y wireguard-tools 2>/dev/null || true
+            else
+                yum remove -y wireguard-tools 2>/dev/null || true
+            fi
+            ;;
+    esac
+    
+    # Remove all configuration files
+    rm -rf "$WG_CONFIG_DIR" 2>/dev/null || true
+    
+    # Remove system configuration
+    rm -f /etc/sysctl.d/99-wireguard.conf 2>/dev/null || true
+    
+    # Reset IP forwarding
+    sysctl -w net.ipv4.ip_forward=0 >/dev/null 2>&1 || true
+    
+    # Remove firewall rules
+    if command -v ufw &> /dev/null; then
+        ufw delete allow "$WG_PORT/udp" 2>/dev/null || true
+    fi
+    
+    if command -v firewall-cmd &> /dev/null; then
+        firewall-cmd --permanent --remove-port="$WG_PORT/udp" 2>/dev/null || true
+        firewall-cmd --permanent --remove-masquerade 2>/dev/null || true
+        firewall-cmd --reload 2>/dev/null || true
+    fi
+    
+    # Clean up iptables rules (basic cleanup)
+    iptables -D INPUT -p udp --dport "$WG_PORT" -j ACCEPT 2>/dev/null || true
+    iptables -F FORWARD 2>/dev/null || true
+    iptables -t nat -F POSTROUTING 2>/dev/null || true
+    
+    if [[ $silent == false ]]; then
+        print_status "Clean uninstall completed"
+    fi
+}
+
+# Fresh reinstall with automatic cleanup
+fresh_reinstall() {
+    print_header "🔄 Fresh WireGuard Reinstallation"
+    
+    echo -e "${YELLOW}This will:${NC}"
+    echo "  • Stop WireGuard service"
+    echo "  • Remove WireGuard packages"
+    echo "  • Delete all configurations"
+    echo "  • Clean firewall rules"
+    echo "  • Perform fresh installation"
+    echo ""
+    echo -e "${RED}⚠️  All existing clients will be removed!${NC}"
+    echo ""
+    
+    read -p "Continue with fresh reinstall? (y/N): " confirm
+    if [[ $confirm != [yY] ]]; then
+        print_info "Reinstall cancelled"
+        return 0
+    fi
+    
+    # Detect system first for cleanup
+    detect_system
+    
+    # Perform clean uninstall
+    print_info "Step 1/2: Cleaning previous installation..."
+    clean_uninstall true
+    
+    # Wait a moment for cleanup to complete
+    sleep 2
+    
+    # Perform fresh installation
+    print_info "Step 2/2: Installing WireGuard..."
+    get_server_ip
+    install_wireguard
+    generate_server_keys
+    create_server_config
+    enable_ip_forwarding
+    configure_firewall
+    start_wireguard
+    
+    print_header "🎉 Fresh Installation Complete!"
+    echo -e "${GREEN}WireGuard has been completely reinstalled!${NC}"
+    echo ""
+    echo "Server details:"
+    echo "  Public Key: $SERVER_PUBLIC_KEY"
+    echo "  Server IP: $SERVER_IP"
+    echo "  Port: $WG_PORT"
+    echo "  Network: $WG_NET.0/24"
+    echo ""
+    echo -e "${CYAN}📁 Configuration files are stored in: $WG_CONFIG_DIR/${NC}"
+    echo ""
+    print_status "Ready to add clients!"
 }
 
 # Generate client config
@@ -500,12 +611,9 @@ uninstall() {
         return 0
     fi
     
-    systemctl stop wg-quick@"$WG_INTERFACE" 2>/dev/null || true
-    systemctl disable wg-quick@"$WG_INTERFACE" 2>/dev/null || true
-    rm -rf "$WG_CONFIG_DIR"
-    rm -f /etc/sysctl.d/99-wireguard.conf
-    
-    print_status "WireGuard uninstalled"
+    detect_system
+    clean_uninstall false
+    print_status "WireGuard completely uninstalled"
 }
 
 # Install complete server
@@ -542,7 +650,7 @@ install_server() {
     echo ""
     echo -e "${CYAN}📁 Configuration files are stored in: $WG_CONFIG_DIR/${NC}"
     echo ""
-    print_status "Use option 2 to add your first client"
+    print_status "Use option 3 to add your first client"
 }
 
 # Main menu
@@ -552,16 +660,21 @@ show_menu() {
     echo -e "${CYAN}║${NC}                 ${WHITE}🛡️  WireGuard Management${NC}                     ${CYAN}║${NC}"
     echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
     echo ""
-    echo -e "${WHITE}📋 Main Options:${NC}"
-    echo "   1. Install WireGuard Server"
-    echo "   2. Add Client (with config file paths)"
-    echo "   3. List Clients (shows file locations)"
-    echo "   4. Show Client Config (with copy commands)"
-    echo "   5. Remove Client"
-    echo "   6. Show Server Status"
-    echo "   7. Show All Config File Locations"
-    echo "   8. Uninstall WireGuard"
-    echo "   9. Exit"
+    echo -e "${WHITE}📋 Installation Options:${NC}"
+    echo "   1. Install WireGuard Server (new install)"
+    echo "   2. Fresh Reinstall (clean uninstall + install)"
+    echo ""
+    echo -e "${WHITE}📋 Client Management:${NC}"
+    echo "   3. Add Client (with config file paths)"
+    echo "   4. List Clients (shows file locations)"
+    echo "   5. Show Client Config (with copy commands)"
+    echo "   6. Remove Client"
+    echo ""
+    echo -e "${WHITE}📋 System Management:${NC}"
+    echo "   7. Show Server Status"
+    echo "   8. Show All Config File Locations"
+    echo "   9. Uninstall WireGuard"
+    echo "  10. Exit"
     echo ""
     echo -e "${CYAN}💡 All config files are stored in: $WG_CONFIG_DIR/clients/${NC}"
     echo ""
