@@ -573,19 +573,20 @@ main() {
     
     while true; do
         show_menu
-        read -p "Choose option [1-9]: " choice
+        read -p "Choose option [1-10]: " choice
         
         case $choice in
             1) install_server ;;
-            2) add_client ;;
-            3) list_clients ;;
-            4) show_client_config ;;
-            5) remove_client ;;
-            6) show_status ;;
-            7) show_config_locations ;;
-            8) uninstall ;;
-            9) print_info "Goodbye!"; exit 0 ;;
-            *) print_error "Invalid option. Please choose 1-9." ;;
+            2) fresh_reinstall ;;
+            3) add_client ;;
+            4) list_clients ;;
+            5) show_client_config ;;
+            6) remove_client ;;
+            7) show_status ;;
+            8) show_config_locations ;;
+            9) uninstall ;;
+            10) print_info "Goodbye!"; exit 0 ;;
+            *) print_error "Invalid option. Please choose 1-10." ;;
         esac
         
         echo ""
