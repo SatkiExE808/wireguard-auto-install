@@ -1,4 +1,3 @@
-```bash
 #!/bin/bash
 # Interactive WireGuard and SSH management script for VPS
 # Run as root: sudo bash wireguard_menu.sh
@@ -23,10 +22,12 @@ PUBLIC_IP=$(curl -s ifconfig.me || echo "<YOUR_VPS_PUBLIC_IP>")
 
 # Function to install WireGuard and dependencies
 install_wireguard() {
-  echo "Installing WireGuard, SSH, and firewall..."
-  apt update && apt install -y wireguard openssh-server ufw qrencode
+  echo "Installing WireGuard, SSH, firewall, and QR code tools..."
+  apt update && apt install -y wireguard openssh-server ufw qrencode fail2ban
   systemctl enable sshd
   systemctl restart sshd
+  systemctl enable fail2ban
+  systemctl restart fail2ban
   echo "Installation complete."
 }
 
@@ -82,6 +83,7 @@ add_client_peer() {
   CLIENT_PUBLIC_KEY=$(cat /etc/wireguard/${CLIENT_NAME}_publickey)
   
   echo "Adding client to $WG_CONF..."
+  echo -e "\n# $CLIENT_NAME" >> $WG_CONF
   cat >> $WG_CONF << EOF
 [Peer]
 PublicKey = $CLIENT_PUBLIC_KEY
@@ -120,7 +122,8 @@ remove_client_peer() {
   read -p "Enter client name to remove: " CLIENT_NAME
   if grep -q "# $CLIENT_NAME" $WG_CONF; then
     echo "Removing client $CLIENT_NAME..."
-    sed -i "/# $CLIENT_NAME/,/^$/d" $WG_CONF
+    sed -i "/# $CLIENT_NAME/,/PersistentKeepalive/d" $WG_CONF
+    rm -f /etc/wireguard/${CLIENT_NAME}_privatekey /etc/wireguard/${CLIENT_NAME}_publickey /etc/wireguard/${CLIENT_NAME}.conf
     echo "Client removed."
   else
     echo "Client $CLIENT_NAME not found."
@@ -130,7 +133,7 @@ remove_client_peer() {
 # Function to start WireGuard
 start_wireguard() {
   echo "Starting WireGuard..."
-  wg-quick up wg0 2>/dev/null || echo "WireGuard failed to start. Check configuration."
+  wg-quick up wg0 2>/dev/null || { echo "WireGuard failed to start. Check $WG_CONF."; exit 1; }
   systemctl enable wg-quick@wg0
   echo "WireGuard started."
 }
@@ -165,7 +168,7 @@ uninstall_wireguard() {
   if [[ "$CONFIRM" =~ ^[yY]$ ]]; then
     echo "Uninstalling WireGuard..."
     wg-quick down wg0 2>/dev/null || true
-    apt remove -y wireguard
+    apt remove -y wireguard qrencode
     rm -rf /etc/wireguard
     ufw delete allow $PORT/udp 2>/dev/null || true
     echo "WireGuard uninstalled."
@@ -207,4 +210,3 @@ while true; do
     *) echo "Invalid option. Please select 1-12." ;;
   esac
 done
-```
