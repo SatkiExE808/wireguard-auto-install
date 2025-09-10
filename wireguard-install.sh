@@ -493,12 +493,13 @@ show_menu() {
 }
 
 # Main function
+# Main function
 main() {
     check_root
     
     while true; do
         show_menu
-        read -p "Choose option [1-8]: " choice
+        read -p "Choose option [1-9]: " choice
         
         case $choice in
             1) install_server ;;
@@ -507,9 +508,10 @@ main() {
             4) show_client_config ;;
             5) remove_client ;;
             6) show_status ;;
-            7) uninstall ;;
-            8) print_info "Goodbye!"; exit 0 ;;
-            *) print_error "Invalid option" ;;
+            7) show_config_locations ;;
+            8) uninstall ;;
+            9) print_info "Goodbye!"; exit 0 ;;
+            *) print_error "Invalid option. Please choose 1-9." ;;
         esac
         
         echo ""
