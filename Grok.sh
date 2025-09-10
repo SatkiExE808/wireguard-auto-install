@@ -23,9 +23,8 @@ PUBLIC_IP=$(curl -s ifconfig.me || echo "<YOUR_VPS_PUBLIC_IP>")
 
 # Function to install WireGuard and dependencies
 install_wireguard() {
-  echo "Installing WireGuard and dependencies..."
-  apt update && apt install -y wireguard openssh-server ufw
-  echo "Enabling SSH..."
+  echo "Installing WireGuard, SSH, and firewall..."
+  apt update && apt install -y wireguard openssh-server ufw qrencode
   systemctl enable sshd
   systemctl restart sshd
   echo "Installation complete."
@@ -75,7 +74,7 @@ EOF
 # Function to add a new client peer
 add_client_peer() {
   read -p "Enter client name (e.g., client1): " CLIENT_NAME
-  CLIENT_IP="$CLIENT_IP_BASE.$(( $(grep -c AllowedIPs $WG_CONF) + 2 ))/32"
+  CLIENT_IP="$CLIENT_IP_BASE.$(( $(grep -c AllowedIPs $WG_CONF 2>/dev/null || echo 0) + 2 ))/32"
   
   echo "Generating client keys for $CLIENT_NAME..."
   wg genkey | tee /etc/wireguard/${CLIENT_NAME}_privatekey | wg pubkey > /etc/wireguard/${CLIENT_NAME}_publickey
@@ -108,13 +107,30 @@ EOF
   echo -e "\n=== Client Configuration for $CLIENT_NAME ==="
   echo "Save the following to '${CLIENT_NAME}.conf' on the client device:"
   cat $CLIENT_CONF
-  echo -e "\nCopy this configuration to your client and run: wg-quick up ${CLIENT_NAME}.conf"
+  echo -e "\nGenerating QR code for easy client setup..."
+  qrencode -t ansiutf8 < $CLIENT_CONF
+  echo -e "\nCopy this configuration to your client or scan the QR code."
+  echo "Run on client: wg-quick up ${CLIENT_NAME}.conf"
+}
+
+# Function to remove a client peer
+remove_client_peer() {
+  echo "Current peers:"
+  grep -B2 AllowedIPs $WG_CONF || echo "No peers found."
+  read -p "Enter client name to remove: " CLIENT_NAME
+  if grep -q "# $CLIENT_NAME" $WG_CONF; then
+    echo "Removing client $CLIENT_NAME..."
+    sed -i "/# $CLIENT_NAME/,/^$/d" $WG_CONF
+    echo "Client removed."
+  else
+    echo "Client $CLIENT_NAME not found."
+  fi
 }
 
 # Function to start WireGuard
 start_wireguard() {
   echo "Starting WireGuard..."
-  wg-quick up wg0
+  wg-quick up wg0 2>/dev/null || echo "WireGuard failed to start. Check configuration."
   systemctl enable wg-quick@wg0
   echo "WireGuard started."
 }
@@ -130,7 +146,7 @@ stop_wireguard() {
 # Function to check WireGuard status
 check_status() {
   echo "WireGuard status:"
-  wg show
+  wg show || echo "WireGuard is not running."
 }
 
 # Function to restrict SSH to VPN
@@ -143,6 +159,21 @@ restrict_ssh_to_vpn() {
   echo "SSH restricted to VPN. Connect via: ssh user@$SERVER_IP"
 }
 
+# Function to uninstall WireGuard
+uninstall_wireguard() {
+  read -p "Are you sure you want to uninstall WireGuard? This will remove all configs [y/N]: " CONFIRM
+  if [[ "$CONFIRM" =~ ^[yY]$ ]]; then
+    echo "Uninstalling WireGuard..."
+    wg-quick down wg0 2>/dev/null || true
+    apt remove -y wireguard
+    rm -rf /etc/wireguard
+    ufw delete allow $PORT/udp 2>/dev/null || true
+    echo "WireGuard uninstalled."
+  else
+    echo "Uninstallation cancelled."
+  fi
+}
+
 # Main menu
 while true; do
   echo -e "\n=== WireGuard and SSH Management Menu ==="
@@ -151,12 +182,14 @@ while true; do
   echo "3. Configure firewall"
   echo "4. Generate server configuration"
   echo "5. Add client peer"
-  echo "6. Start WireGuard"
-  echo "7. Stop WireGuard"
-  echo "8. Check WireGuard status"
-  echo "9. Restrict SSH to VPN only"
-  echo "10. Exit"
-  read -p "Select an option [1-10]: " OPTION
+  echo "6. Remove client peer"
+  echo "7. Start WireGuard"
+  echo "8. Stop WireGuard"
+  echo "9. Check WireGuard status"
+  echo "10. Restrict SSH to VPN only"
+  echo "11. Uninstall WireGuard"
+  echo "12. Exit"
+  read -p "Select an option [1-12]: " OPTION
   
   case $OPTION in
     1) install_wireguard ;;
@@ -164,12 +197,14 @@ while true; do
     3) configure_firewall ;;
     4) generate_server_config ;;
     5) add_client_peer ;;
-    6) start_wireguard ;;
-    7) stop_wireguard ;;
-    8) check_status ;;
-    9) restrict_ssh_to_vpn ;;
-    10) echo "Exiting..."; exit 0 ;;
-    *) echo "Invalid option. Please select 1-10." ;;
+    6) remove_client_peer ;;
+    7) start_wireguard ;;
+    8) stop_wireguard ;;
+    9) check_status ;;
+    10) restrict_ssh_to_vpn ;;
+    11) uninstall_wireguard ;;
+    12) echo "Exiting..."; exit 0 ;;
+    *) echo "Invalid option. Please select 1-12." ;;
   esac
 done
 ```
