@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Quick Fix WireGuard Auto-Install Script
-# This is a working version without syntax errors
+# WireGuard Auto-Install Script - Fixed Version
+# Complete VPN server deployment and management
 
 set -euo pipefail
 
@@ -21,7 +21,7 @@ WG_PORT="51820"
 WG_NET="10.66.66"
 SERVER_IP=""
 CLIENT_DNS="1.1.1.1,8.8.8.8"
-SCRIPT_VERSION="2.0.1"
+SCRIPT_VERSION="2.0.2"
 
 # Print functions
 print_status() {
@@ -255,15 +255,22 @@ add_client() {
         wg syncconf "$WG_INTERFACE" <(wg-quick strip "$WG_INTERFACE")
         
         echo ""
-        print_info "Client configuration:"
+        print_info "Configuration for $client_name:"
+        echo -e "${CYAN}────────────────────────────────────────${NC}"
         cat "$WG_CONFIG_DIR/clients/$client_name.conf"
+        echo -e "${CYAN}────────────────────────────────────────${NC}"
         
         if command -v qrencode &> /dev/null; then
             echo ""
-            print_info "QR Code:"
+            print_info "📱 QR Code for mobile devices:"
             qrencode -t ansiutf8 < "$WG_CONFIG_DIR/clients/$client_name.conf"
         fi
         
+        echo ""
+        print_info "📁 Configuration files saved to:"
+        echo "   Main config: $WG_CONFIG_DIR/clients/$client_name.conf"
+        echo "   Copy command: cp $WG_CONFIG_DIR/clients/$client_name.conf ~/Downloads/"
+        echo ""
         print_status "Client added successfully!"
     else
         print_error "Failed to create client"
@@ -274,21 +281,33 @@ add_client() {
 list_clients() {
     print_header "WireGuard Clients"
     
-    echo -e "${BLUE}Active connections:${NC}"
-    wg show "$WG_INTERFACE" 2>/dev/null || echo "No active connections"
+    echo -e "${BLUE}📊 Active connections:${NC}"
+    wg show "$WG_INTERFACE" 2>/dev/null || echo "   No active connections"
     
     echo ""
-    echo -e "${BLUE}Client configurations:${NC}"
+    echo -e "${BLUE}📁 Client configurations:${NC}"
     if [[ -d "$WG_CONFIG_DIR/clients" ]]; then
+        local count=0
         for config in "$WG_CONFIG_DIR/clients"/*.conf; do
             if [[ -f $config ]]; then
                 local name=$(basename "$config" .conf)
                 local ip=$(grep "Address" "$config" | cut -d'=' -f2 | tr -d ' ' | cut -d'/' -f1)
-                echo "  $name: $ip"
+                local file_path="$config"
+                printf "   %-15s %s\n" "$name:" "$ip"
+                printf "   %-15s %s\n" "File:" "$file_path"
+                echo ""
+                ((count++))
             fi
         done
+        
+        if [[ $count -gt 0 ]]; then
+            echo -e "${CYAN}💾 All client configs stored in: $WG_CONFIG_DIR/clients/${NC}"
+            echo -e "${CYAN}📋 Copy all configs: cp $WG_CONFIG_DIR/clients/*.conf ~/Downloads/${NC}"
+        else
+            echo "   No clients found"
+        fi
     else
-        echo "  No clients found"
+        echo "   No clients found"
     fi
 }
 
@@ -316,12 +335,19 @@ show_client_config() {
     fi
     
     echo ""
-    print_info "Configuration for $client_name:"
+    print_info "📁 Configuration file location:"
+    echo "   Path: $config_file"
+    echo "   Copy to Downloads: cp $config_file ~/Downloads/"
+    echo "   View file: cat $config_file"
+    echo ""
+    print_info "Configuration content:"
+    echo -e "${CYAN}────────────────────────────────────────${NC}"
     cat "$config_file"
+    echo -e "${CYAN}────────────────────────────────────────${NC}"
     
     if command -v qrencode &> /dev/null; then
         echo ""
-        print_info "QR Code:"
+        print_info "📱 QR Code for mobile devices:"
         qrencode -t ansiutf8 < "$config_file"
     fi
 }
@@ -421,6 +447,47 @@ show_status() {
     wg show "$WG_INTERFACE" 2>/dev/null || echo "Interface not active"
 }
 
+# Show all config file locations
+show_config_locations() {
+    print_header "📁 Configuration File Locations"
+    
+    echo -e "${BLUE}🔧 Server Configuration:${NC}"
+    echo "   Main config: $WG_CONFIG_DIR/$WG_INTERFACE.conf"
+    echo "   Private key: $WG_CONFIG_DIR/server_private.key"
+    echo "   Public key:  $WG_CONFIG_DIR/server_public.key"
+    
+    echo ""
+    echo -e "${BLUE}👥 Client Configurations:${NC}"
+    if [[ -d "$WG_CONFIG_DIR/clients" ]]; then
+        local count=0
+        for config in "$WG_CONFIG_DIR/clients"/*.conf; do
+            if [[ -f $config ]]; then
+                local name=$(basename "$config" .conf)
+                echo "   Client '$name': $config"
+                ((count++))
+            fi
+        done
+        
+        if [[ $count -eq 0 ]]; then
+            echo "   No client configurations found"
+        else
+            echo ""
+            echo -e "${CYAN}📂 Client directory: $WG_CONFIG_DIR/clients/${NC}"
+            echo -e "${CYAN}📋 Copy all clients: cp $WG_CONFIG_DIR/clients/*.conf ~/Downloads/${NC}"
+            echo -e "${CYAN}🗂️  List all files: ls -la $WG_CONFIG_DIR/clients/${NC}"
+        fi
+    else
+        echo "   No client configurations found"
+    fi
+    
+    echo ""
+    echo -e "${BLUE}💾 Useful Commands:${NC}"
+    echo "   View server config: cat $WG_CONFIG_DIR/$WG_INTERFACE.conf"
+    echo "   View client config: cat $WG_CONFIG_DIR/clients/CLIENT_NAME.conf"
+    echo "   Copy to Downloads:  cp $WG_CONFIG_DIR/clients/CLIENT_NAME.conf ~/Downloads/"
+    echo "   List all configs:   find $WG_CONFIG_DIR -name '*.conf'"
+}
+
 # Uninstall
 uninstall() {
     print_header "Uninstall WireGuard"
@@ -473,26 +540,33 @@ install_server() {
     echo "  Port: $WG_PORT"
     echo "  Network: $WG_NET.0/24"
     echo ""
+    echo -e "${CYAN}📁 Configuration files are stored in: $WG_CONFIG_DIR/${NC}"
+    echo ""
     print_status "Use option 2 to add your first client"
 }
 
 # Main menu
 show_menu() {
     echo ""
-    echo -e "${CYAN}WireGuard Management${NC}"
-    echo "===================="
-    echo "1. Install WireGuard Server"
-    echo "2. Add Client"
-    echo "3. List Clients"
-    echo "4. Show Client Config"
-    echo "5. Remove Client"
-    echo "6. Show Status"
-    echo "7. Uninstall"
-    echo "8. Exit"
+    echo -e "${CYAN}╔══════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║${NC}                 ${WHITE}🛡️  WireGuard Management${NC}                     ${CYAN}║${NC}"
+    echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    echo -e "${WHITE}📋 Main Options:${NC}"
+    echo "   1. Install WireGuard Server"
+    echo "   2. Add Client (with config file paths)"
+    echo "   3. List Clients (shows file locations)"
+    echo "   4. Show Client Config (with copy commands)"
+    echo "   5. Remove Client"
+    echo "   6. Show Server Status"
+    echo "   7. Show All Config File Locations"
+    echo "   8. Uninstall WireGuard"
+    echo "   9. Exit"
+    echo ""
+    echo -e "${CYAN}💡 All config files are stored in: $WG_CONFIG_DIR/clients/${NC}"
     echo ""
 }
 
-# Main function
 # Main function
 main() {
     check_root
