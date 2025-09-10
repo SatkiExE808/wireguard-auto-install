@@ -2,7 +2,7 @@
 
 # WireGuard Auto Install Script for VPS
 # Supports Ubuntu, Debian, CentOS, and RHEL
-# Run with: curl -O https://raw.githubusercontent.com/your-repo/wireguard-install.sh && bash wireguard-install.sh
+# Run with: curl -O https://raw.githubusercontent.com/SatkiExE808/wireguard-auto-install/main/wireguard-install.sh && bash wireguard-install.sh
 
 set -e
 
@@ -173,6 +173,19 @@ generate_client_config() {
     
     print_status "Generating configuration for client: $client_name"
     
+    # Read server public key from file
+    if [[ -f "$WG_CONFIG_DIR/server_public.key" ]]; then
+        SERVER_PUBLIC_KEY=$(cat $WG_CONFIG_DIR/server_public.key)
+    else
+        print_error "Server public key not found. Please reinstall the server."
+        return 1
+    fi
+    
+    # Get server IP if not set
+    if [[ -z "$SERVER_IP" ]]; then
+        SERVER_IP=$(curl -s ipv4.icanhazip.com 2>/dev/null || curl -s ifconfig.me 2>/dev/null || curl -s ipinfo.io/ip 2>/dev/null)
+    fi
+    
     # Generate client keys
     CLIENT_PRIVATE_KEY=$(wg genkey)
     CLIENT_PUBLIC_KEY=$(echo $CLIENT_PRIVATE_KEY | wg pubkey)
@@ -204,6 +217,13 @@ EOF
     echo ""
     print_status "QR code generated above for $client_name"
     print_status "Client configuration saved to: $WG_CONFIG_DIR/$client_name.conf"
+    
+    # Show the config content for verification
+    echo ""
+    echo -e "${YELLOW}Client Configuration:${NC}"
+    echo "====================="
+    cat $WG_CONFIG_DIR/$client_name.conf
+    echo "====================="
     
     # Restart WireGuard to apply new peer
     systemctl restart wg-quick@$WG_INTERFACE
@@ -252,7 +272,38 @@ list_clients() {
     
     echo ""
     echo "Available client configurations:"
-    ls -1 $WG_CONFIG_DIR/*.conf | grep -v $WG_INTERFACE.conf | sed 's/.*\///' | sed 's/.conf$//' || echo "No client configurations found"
+    ls -1 $WG_CONFIG_DIR/*.conf 2>/dev/null | grep -v $WG_INTERFACE.conf | sed 's/.*\///' | sed 's/.conf$//' || echo "No client configurations found"
+}
+
+# Function to show client config
+show_client_config() {
+    echo ""
+    echo -e "${BLUE}=== Show Client Configuration ===${NC}"
+    
+    # List available clients
+    echo "Available clients:"
+    ls -1 $WG_CONFIG_DIR/*.conf 2>/dev/null | grep -v $WG_INTERFACE.conf | sed 's/.*\///' | sed 's/.conf$//' || {
+        print_warning "No clients found"
+        return 1
+    }
+    
+    echo ""
+    read -p "Enter client name to show: " CLIENT_NAME
+    
+    if [[ ! -f "$WG_CONFIG_DIR/$CLIENT_NAME.conf" ]]; then
+        print_error "Client $CLIENT_NAME not found"
+        return 1
+    fi
+    
+    echo ""
+    echo -e "${YELLOW}Configuration for $CLIENT_NAME:${NC}"
+    echo "================================="
+    cat $WG_CONFIG_DIR/$CLIENT_NAME.conf
+    echo "================================="
+    
+    echo ""
+    echo -e "${YELLOW}QR Code for $CLIENT_NAME:${NC}"
+    qrencode -t ansiutf8 < $WG_CONFIG_DIR/$CLIENT_NAME.conf
 }
 
 # Function to remove client
@@ -321,9 +372,67 @@ show_status() {
     
     echo ""
     echo "Server configuration:"
-    echo -e "${YELLOW}Public Key:${NC} $SERVER_PUBLIC_KEY"
+    if [[ -f "$WG_CONFIG_DIR/server_public.key" ]]; then
+        SERVER_PUBLIC_KEY=$(cat $WG_CONFIG_DIR/server_public.key)
+        echo -e "${YELLOW}Public Key:${NC} $SERVER_PUBLIC_KEY"
+    else
+        echo -e "${RED}Server public key not found${NC}"
+    fi
     echo -e "${YELLOW}Listen Port:${NC} $WG_PORT"
+    if [[ -z "$SERVER_IP" ]]; then
+        SERVER_IP=$(curl -s ipv4.icanhazip.com 2>/dev/null || curl -s ifconfig.me 2>/dev/null || curl -s ipinfo.io/ip 2>/dev/null)
+    fi
     echo -e "${YELLOW}Server IP:${NC} $SERVER_IP"
+}
+
+# Function to fix existing client configs
+fix_client_configs() {
+    echo ""
+    echo -e "${BLUE}=== Fix Client Configurations ===${NC}"
+    
+    if [[ ! -f "$WG_CONFIG_DIR/server_public.key" ]]; then
+        print_error "Server public key not found. Cannot fix client configs."
+        return 1
+    fi
+    
+    SERVER_PUBLIC_KEY=$(cat $WG_CONFIG_DIR/server_public.key)
+    if [[ -z "$SERVER_IP" ]]; then
+        SERVER_IP=$(curl -s ipv4.icanhazip.com 2>/dev/null || curl -s ifconfig.me 2>/dev/null || curl -s ipinfo.io/ip 2>/dev/null)
+    fi
+    
+    print_status "Fixing client configurations..."
+    
+    # Find and fix all client configs missing public key
+    for config in $WG_CONFIG_DIR/*.conf; do
+        if [[ "$config" != "$WG_CONFIG_DIR/$WG_INTERFACE.conf" ]] && [[ -f "$config" ]]; then
+            if ! grep -q "PublicKey" "$config" || ! grep -q "Endpoint" "$config"; then
+                echo "Fixing $(basename $config)..."
+                
+                # Get the current content
+                PRIVATE_KEY=$(grep "PrivateKey" "$config" | cut -d" " -f3)
+                ADDRESS=$(grep "Address" "$config" | cut -d" " -f3)
+                DNS=$(grep "DNS" "$config" | cut -d" " -f3- || echo "$CLIENT_DNS")
+                
+                # Recreate the config with all fields
+                cat > "$config" << EOF
+[Interface]
+PrivateKey = $PRIVATE_KEY
+Address = $ADDRESS
+DNS = $DNS
+
+[Peer]
+PublicKey = $SERVER_PUBLIC_KEY
+Endpoint = $SERVER_IP:$WG_PORT
+AllowedIPs = 0.0.0.0/0
+PersistentKeepalive = 25
+EOF
+                
+                print_status "Fixed: $(basename $config)"
+            fi
+        fi
+    done
+    
+    print_status "Client configurations fixed!"
 }
 
 # Function to uninstall WireGuard
@@ -360,10 +469,12 @@ show_menu() {
     echo "1. Install WireGuard Server"
     echo "2. Add Client"
     echo "3. List Clients"
-    echo "4. Remove Client"
-    echo "5. Show Server Status"
-    echo "6. Uninstall WireGuard"
-    echo "7. Exit"
+    echo "4. Show Client Config"
+    echo "5. Remove Client"
+    echo "6. Show Server Status"
+    echo "7. Fix Client Configs"
+    echo "8. Uninstall WireGuard"
+    echo "9. Exit"
     echo ""
 }
 
@@ -404,7 +515,7 @@ main() {
         # WireGuard is already configured, show menu
         while true; do
             show_menu
-            read -p "Choose an option [1-7]: " choice
+            read -p "Choose an option [1-9]: " choice
             
             case $choice in
                 1)
@@ -418,16 +529,22 @@ main() {
                     list_clients
                     ;;
                 4)
-                    remove_client
+                    show_client_config
                     ;;
                 5)
-                    show_status
+                    remove_client
                     ;;
                 6)
+                    show_status
+                    ;;
+                7)
+                    fix_client_configs
+                    ;;
+                8)
                     uninstall_wireguard
                     break
                     ;;
-                7)
+                9)
                     print_status "Goodbye!"
                     break
                     ;;
@@ -451,7 +568,7 @@ main() {
             # After installation, show menu
             while true; do
                 show_menu
-                read -p "Choose an option [1-7]: " choice
+                read -p "Choose an option [1-9]: " choice
                 
                 case $choice in
                     1)
@@ -464,16 +581,22 @@ main() {
                         list_clients
                         ;;
                     4)
-                        remove_client
+                        show_client_config
                         ;;
                     5)
-                        show_status
+                        remove_client
                         ;;
                     6)
+                        show_status
+                        ;;
+                    7)
+                        fix_client_configs
+                        ;;
+                    8)
                         uninstall_wireguard
                         break
                         ;;
-                    7)
+                    9)
                         print_status "Goodbye!"
                         break
                         ;;
